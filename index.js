@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-extra');
+const stealth = require('puppeteer-extra-plugin-stealth')();
+chromium.use(stealth);
+
 const readline = require('readline');
 
 const BASE = 'https://internshala.com';
@@ -41,7 +44,10 @@ async function fillField(page, sels, val, label) {
       if (!el) continue;
       if (!(await el.isVisible())) continue;
       await el.scrollIntoViewIfNeeded();
-      await el.fill(val, { timeout: 3000 });
+      await el.click({ timeout: 2000 });
+      await page.waitForTimeout(150);
+      await el.fill('');
+      await el.type(val, { delay: 50 });
       log('  [text] ' + (label||s) + ' = ' + val);
       return true;
     } catch(e){}
@@ -61,7 +67,7 @@ async function clickPill(page, text) {
   for (const s of sels) {
     try {
       const el = await page.$(s);
-      if (el) {
+      if (el && await el.isVisible()) {
         await el.scrollIntoViewIfNeeded();
         await el.click({ timeout: 2000 });
         log('  [pill] ' + text);
@@ -108,8 +114,8 @@ async function autocomplete(page, sel, query, matchFirst) {
     await inp.scrollIntoViewIfNeeded();
     await inp.click();
     await inp.fill('');
-    await inp.type(query, { delay: 80 });
-    await page.waitForTimeout(2000);
+    await inp.type(query, { delay: 100 });
+    await page.waitForTimeout(2500);
 
     const options = await page.$$('li, [role="option"], .pac-item, [class*="suggestion"], [class*="option"]');
     let clicked = false;
@@ -143,7 +149,7 @@ async function clickNext(page, texts) {
   for (const t of texts) {
     try {
       const btn = await page.$('button:has-text("' + t + '"), a:has-text("' + t + '")');
-      if (btn) {
+      if (btn && await btn.isVisible()) {
         await btn.scrollIntoViewIfNeeded();
         await btn.click({ timeout: 3000 });
         log('  [next] ' + t);
@@ -199,13 +205,36 @@ async function clickNext(page, texts) {
 
   const browser = await chromium.launch({
     headless: true,
-    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage']
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-features=IsolateOrigins,site-per-process',
+    ]
   });
   const ctx = await browser.newContext({
-    viewport: { width: 1280, height: 900 },
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    viewport: { width: 1366, height: 900 },
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    locale: 'en-IN',
+    timezoneId: 'Asia/Kolkata',
+    extraHTTPHeaders: {
+      'Accept-Language': 'en-IN,en;q=0.9',
+    },
   });
   const page = await ctx.newPage();
+
+  // intercept responses buat debug
+  page.on('response', async (r) => {
+    const u = r.url();
+    if (u.includes('registration') || u.includes('submit') || u.includes('otp') || u.includes('verify')) {
+      try {
+        const txt = await r.text();
+        log('[RESP ' + r.status() + '] ' + u.split('?')[0]);
+        if (txt.length < 500) log('  body: ' + txt);
+      } catch(e){}
+    }
+  });
 
   // ================= STEP 1: Halaman awal =================
   log('[*] Buka halaman awal...');
@@ -219,7 +248,7 @@ async function clickNext(page, texts) {
   await page.waitForTimeout(5000);
   await page.screenshot({ path: 's2-signup.png' });
 
-  // ================= STEP 2: Sign up form =================
+  // ================= STEP 2: Sign up =================
   log('[*] Isi form sign up...');
   await fillField(page, ['#email','#modal_email'], email, 'email');
   await fillField(page, ['#password','#modal_password'], password, 'password');
@@ -235,8 +264,21 @@ async function clickNext(page, texts) {
   } catch(e) {
     await clickNext(page, ['Sign up', 'Sign Up', 'Register']);
   }
-  await page.waitForTimeout(7000);
+  await page.waitForTimeout(8000);
   await page.screenshot({ path: 's4-after-signup.png' });
+
+  // cek kalau ada modal error
+  const errorText = await page.evaluate(() => {
+    const modals = document.querySelectorAll('.modal, .alert, .error, [class*="error"], [class*="alert"]');
+    for (const m of modals) {
+      if (m.offsetParent !== null) {
+        const t = m.innerText.trim();
+        if (t && t.length < 300) return t;
+      }
+    }
+    return null;
+  });
+  if (errorText) log('[!] Modal/error: ' + errorText.replace(/\s+/g, ' '));
 
   // ================= STEP 3: OTP =================
   log('\n=== OTP dikirim ke email ===');
@@ -271,11 +313,11 @@ async function clickNext(page, texts) {
 
     await page.screenshot({ path: 's5-otp-filled.png' });
     await clickNext(page, ['Verify','Submit','Continue','Next']);
-    await page.waitForTimeout(7000);
+    await page.waitForTimeout(8000);
     await page.screenshot({ path: 's6-after-otp.png' });
   }
 
-  // ================= STEP 4: Onboarding form 1 =================
+  // ================= STEP 4: Onboarding 1 =================
   log('[*] Form onboarding 1...');
   await page.waitForTimeout(3000);
 
@@ -290,9 +332,7 @@ async function clickNext(page, texts) {
     data.city, true);
 
   await clickPill(page, data.gender);
-
   for (const l of data.langs) await clickPill(page, l);
-
   await clickPill(page, data.type);
   await clickPill(page, data.course);
 
@@ -319,36 +359,27 @@ async function clickNext(page, texts) {
   } catch(e){}
 
   await page.screenshot({ path: 's7-onboard1.png' });
-  log('[*] Next...');
   await clickNext(page, ['Next','Continue','Save']);
-  await page.waitForTimeout(5000);
+  await page.waitForTimeout(6000);
 
   // ================= STEP 5: Preferences =================
-  log('[*] Form onboarding 2 (preferences)...');
-  await page.waitForTimeout(2000);
-
-  for (const i of data.interests) {
-    await clickPill(page, i);
-  }
-
+  log('[*] Form onboarding 2...');
+  for (const i of data.interests) await clickPill(page, i);
   await page.screenshot({ path: 's8-prefs.png' });
   await clickNext(page, ['Next','Continue','Save']);
-  await page.waitForTimeout(5000);
+  await page.waitForTimeout(6000);
 
   // ================= STEP 6: Career goal =================
-  log('[*] Form onboarding 3 (career goal)...');
-  await page.waitForTimeout(2000);
-
+  log('[*] Form onboarding 3...');
   await clickPill(page, data.looking);
   await clickPill(page, data.mode);
   await clickCheckbox(page, data.goal);
-
   await page.screenshot({ path: 's9-goal.png' });
   await clickNext(page, ['Find me opportunities','Find opportunities','Finish','Submit','Next']);
-  await page.waitForTimeout(7000);
+  await page.waitForTimeout(8000);
 
-  // ================= STEP 7: Cari link Gemini =================
-  log('[*] Cari link "Free Gemini Access"...');
+  // ================= STEP 7: Cari Gemini =================
+  log('[*] Cari link Gemini...');
   await page.waitForLoadState('networkidle').catch(()=>{});
   await page.waitForTimeout(3000);
   await page.screenshot({ path: 's10-dashboard.png', fullPage: true });
@@ -358,15 +389,17 @@ async function clickNext(page, texts) {
   );
   const gem = links.filter((l) =>
     l.text.toLowerCase().includes('gemini') ||
-    l.href.toLowerCase().includes('gemini')
+    l.href.toLowerCase().includes('gemini') ||
+    l.text.toLowerCase().includes('is pro') ||
+    l.text.toLowerCase().includes('limitless')
   );
 
   log('\n=== Hasil ===');
   if (gem.length) {
     for (const g of gem) log('- ' + g.text + ' -> ' + g.href);
   } else {
-    log('Nggak ada link Gemini di halaman ini.');
-    log('Cek s10-dashboard.png buat lihat dashboard.');
+    log('Nggak ketemu link Gemini/IS PRO.');
+    log('Cek s10-dashboard.png.');
   }
 
   await ask('\nEnter untuk tutup...');
