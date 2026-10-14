@@ -4,140 +4,114 @@ const stealth = require('puppeteer-extra-plugin-stealth')();
 chromium.use(stealth);
 
 const readline = require('readline');
-
+const fs = require('fs');
 const BASE = 'https://internshala.com';
+const COOKIE_FILE = './cookies.json';
 
-const FIRST = ['A5RT','Rizky','Budi','Sari','Dewi','Andi','Putri','Eko'];
-const LAST  = ['Doe','Santoso','Wijaya','Pratama','Lestari','Nugroho'];
-const CITIES = ['Mumbai','Delhi','Bangalore','Jakarta','Surabaya'];
+const CITIES = ['Mumbai','Delhi','Bangalore','Pune','Chennai'];
 const GENDERS = ['Male','Female'];
-const LANGS = ['English','Hindi','Telugu','Tamil'];
+const LANGS = ['English','Hindi'];
 const TYPES = ['Fresher','College student','Working professional'];
 const COURSES = ['B.Tech','BE','B.Com','MBA','B.A'];
 const STREAMS = ['Computer Science','Information Technology','Commerce'];
-const YEARS = ['2020','2021','2022','2023','2024'];
-const INTERESTS = ['Sales','Data Entry','Digital Marketing','Web Development','Marketing','Finance','Software Development','Programming'];
+const YEARS = ['2020','2021','2022','2023','2024','2025','2026'];
+const INTERESTS = ['Sales','Data Entry','Digital Marketing','Web Development','Marketing','Finance'];
 const LOOKING = ['Jobs','Internships'];
 const MODES = ['In-office','Work from home'];
-const GOALS = ['Get an online degree from a premium institute in India','Go for study abroad','Prepare for government exams'];
-const COLLEGES = ['BITS Pilani','BIT Sindri','IIT Delhi','IIT Bombay','NIT Trichy'];
+const GOALS = [
+  'Get an online degree from a premium institute in India',
+  'Go for study abroad',
+  'Prepare for government exams'
+];
+const COLLEGES = ['BITS Pilani','BIT Sindri','IIT Delhi','IIT Bombay'];
+const SKILLS = ['Python','Excel','Communication','Marketing','SQL','Data Analysis'];
 
 function pick(a){return a[Math.floor(Math.random()*a.length)];}
 function pickMany(a,min,max){const n=min+Math.floor(Math.random()*(max-min+1));return a.slice().sort(()=>Math.random()-0.5).slice(0,n);}
 function phone(){let s='';for(let i=0;i<10;i++)s+=Math.floor(Math.random()*10);return s;}
-function cap(s){return s?s.charAt(0).toUpperCase()+s.slice(1):s;}
-function nameFromEmail(mail){
-  const l=(mail.split('@')[0]||'').toLowerCase().replace(/[^a-z]/g,'');
-  if(!l)return null;
-  if(l.length>=6){const m=Math.floor(l.length/2);return{first:cap(l.slice(0,m)),last:cap(l.slice(m))};}
-  return{first:cap(l),last:pick(LAST)};
-}
 
 const rl = readline.createInterface({input:process.stdin,output:process.stdout});
 const ask = (q) => new Promise((r) => rl.question(q,r));
 const log = (s) => console.log(s);
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-async function fillField(page, sels, val, label) {
-  for (const s of sels) {
-    try {
-      const el = await page.$(s);
-      if (!el) continue;
-      if (!(await el.isVisible())) continue;
+// ============ HELPERS ============
+
+async function fillById(page, id, val, label) {
+  try {
+    const el = await page.$(id);
+    if (!el) { log('  [!] ' + (label||id) + ' tidak ada'); return false; }
+    if (!(await el.isVisible())) { log('  [!] ' + (label||id) + ' hidden'); return false; }
+    await el.scrollIntoViewIfNeeded();
+    await el.click({ timeout: 2000 });
+    await sleep(150);
+    await el.fill('');
+    await el.type(val, { delay: 40 });
+    log('  [text] ' + (label||id) + ' = ' + val);
+    return true;
+  } catch(e) {
+    log('  [!] gagal ' + (label||id) + ': ' + e.message);
+    return false;
+  }
+}
+
+async function clickChip(page, text) {
+  // selector tepat dari HTML: div.chip > span.chip-text
+  try {
+    const el = await page.$('div.chip:has(span.chip-text:text-is("' + text + '"))');
+    if (el && await el.isVisible()) {
       await el.scrollIntoViewIfNeeded();
       await el.click({ timeout: 2000 });
-      await page.waitForTimeout(150);
-      await el.fill('');
-      await el.type(val, { delay: 50 });
-      log('  [text] ' + (label||s) + ' = ' + val);
-      return true;
-    } catch(e){}
-  }
-  log('  [!] gagal text: ' + (label||sels[0]));
-  return false;
-}
-
-async function clickPill(page, text) {
-  const sels = [
-    'button:has-text("' + text + '")',
-    'label:has-text("' + text + '")',
-    'div[role="button"]:has-text("' + text + '")',
-    'span:has-text("' + text + '")',
-    'text="' + text + '"',
-  ];
-  for (const s of sels) {
-    try {
-      const el = await page.$(s);
-      if (el && await el.isVisible()) {
-        await el.scrollIntoViewIfNeeded();
-        await el.click({ timeout: 2000 });
-        log('  [pill] ' + text);
-        return true;
-      }
-    } catch(e){}
-  }
-  log('  [!] gagal pill: ' + text);
-  return false;
-}
-
-async function clickCheckbox(page, text) {
-  try {
-    const handle = await page.evaluateHandle((t) => {
-      const labels = Array.from(document.querySelectorAll('label'));
-      for (const l of labels) {
-        if (l.innerText.trim().includes(t)) {
-          const inp = l.querySelector('input[type="checkbox"]');
-          if (inp) return inp;
-          if (l.htmlFor) {
-            const el = document.getElementById(l.htmlFor);
-            if (el) return el;
-          }
-        }
-      }
-      return null;
-    }, text);
-    const el = handle.asElement();
-    if (el) {
-      await el.scrollIntoViewIfNeeded();
-      await el.check({ timeout: 2000 });
-      log('  [check] ' + text);
+      log('  [chip] ' + text);
       return true;
     }
   } catch(e){}
-  log('  [!] gagal check: ' + text);
+
+  // fallback: klik span.chip-text langsung
+  try {
+    const el = await page.$('span.chip-text:text-is("' + text + '")');
+    if (el && await el.isVisible()) {
+      await el.scrollIntoViewIfNeeded();
+      await el.click({ timeout: 2000 });
+      log('  [chip-span] ' + text);
+      return true;
+    }
+  } catch(e){}
+
+  log('  [!] gagal chip: ' + text);
   return false;
 }
 
-async function autocomplete(page, sel, query, matchFirst) {
+async function autocomplete(page, id, query) {
   try {
-    const inp = await page.$(sel);
-    if (!inp) { log('  [!] autocomplete tidak ada: ' + sel); return false; }
+    const inp = await page.$(id);
+    if (!inp || !(await inp.isVisible())) { log('  [!] autocomplete ' + id + ' nggak ada'); return false; }
     await inp.scrollIntoViewIfNeeded();
     await inp.click();
     await inp.fill('');
-    await inp.type(query, { delay: 100 });
-    await page.waitForTimeout(2500);
+    await inp.type(query, { delay: 80 });
+    await sleep(2500);
 
-    const options = await page.$$('li, [role="option"], .pac-item, [class*="suggestion"], [class*="option"]');
-    let clicked = false;
+    // cari dropdown suggestion
+    const options = await page.$$(
+      'ul[role="listbox"] li, [class*="autocomplete"] li, [class*="suggestion"] li, [class*="dropdown"] li, .pac-container .pac-item, [class*="typeahead"] li, div.dropdown div'
+    );
     for (const opt of options) {
       try {
         if (!(await opt.isVisible())) continue;
         const txt = (await opt.innerText()).trim();
         if (!txt) continue;
-        if (matchFirst || txt.toLowerCase().includes(query.toLowerCase().slice(0,3))) {
+        if (txt.toLowerCase().includes(query.toLowerCase().slice(0,3))) {
           await opt.click({ timeout: 1500 });
           log('  [auto] ' + query + ' -> ' + txt.slice(0,40));
-          clicked = true;
-          break;
+          return true;
         }
       } catch(e){}
     }
-    if (!clicked) {
-      await page.keyboard.press('ArrowDown');
-      await page.waitForTimeout(300);
-      await page.keyboard.press('Enter');
-      log('  [auto-enter] ' + query);
-    }
+    await page.keyboard.press('ArrowDown');
+    await sleep(300);
+    await page.keyboard.press('Enter');
+    log('  [auto-enter] ' + query);
     return true;
   } catch(e) {
     log('  [!] autocomplete gagal: ' + query);
@@ -145,29 +119,51 @@ async function autocomplete(page, sel, query, matchFirst) {
   }
 }
 
-async function clickNext(page, texts) {
-  for (const t of texts) {
-    try {
-      const btn = await page.$('button:has-text("' + t + '"), a:has-text("' + t + '")');
-      if (btn && await btn.isVisible()) {
-        await btn.scrollIntoViewIfNeeded();
-        await btn.click({ timeout: 3000 });
-        log('  [next] ' + t);
-        return true;
-      }
-    } catch(e){}
-  }
+async function clickNext(page) {
+  try {
+    const btn = await page.$('button.submit-cta, button.done-cta, button[type="submit"].submit-cta');
+    if (btn && await btn.isVisible()) {
+      await btn.scrollIntoViewIfNeeded();
+      await btn.click({ timeout: 3000 });
+      log('  [next] submit-cta');
+      return true;
+    }
+  } catch(e){}
+  try {
+    const btn = await page.$('button:has-text("Next"), button:has-text("Done"), button:has-text("Save")');
+    if (btn && await btn.isVisible()) {
+      await btn.scrollIntoViewIfNeeded();
+      await btn.click({ timeout: 3000 });
+      log('  [next] button text');
+      return true;
+    }
+  } catch(e){}
+  log('  [!] next tidak ketemu');
   return false;
 }
 
+// ============ MAIN ============
 (async () => {
-  log('\n=== Internshala Auto Register ===\n');
-  const email = (await ask('Email Gmail: ')).trim();
-  const password = (await ask('Password (min 6): ')).trim();
+  log('\n=== Internshala Auto Onboarding + Gemini ===\n');
 
-  const fe = nameFromEmail(email);
-  const first = fe ? fe.first : pick(FIRST);
-  const last  = fe ? fe.last  : pick(LAST);
+  if (!fs.existsSync(COOKIE_FILE)) {
+    log('[!] File ' + COOKIE_FILE + ' tidak ada.');
+    process.exit(1);
+  }
+  const cookieData = JSON.parse(fs.readFileSync(COOKIE_FILE, 'utf8'));
+  const cookies = cookieData.cookies.map(function(c) {
+    var ss = String(c.sameSite || 'lax').toLowerCase();
+    if (ss === 'no_restriction') ss = 'none';
+    if (ss === 'unspecified') ss = 'lax';
+    var finalSS = (ss === 'strict') ? 'Strict' : (ss === 'none') ? 'None' : 'Lax';
+    var obj = {
+      name: c.name, value: c.value, domain: c.domain,
+      path: c.path || '/', httpOnly: c.httpOnly || false,
+      secure: c.secure !== false, sameSite: finalSS
+    };
+    if (c.expirationDate) obj.expires = Math.floor(c.expirationDate);
+    return obj;
+  });
 
   const data = {
     phone: phone(),
@@ -180,227 +176,141 @@ async function clickNext(page, texts) {
     stream: pick(STREAMS),
     startYear: pick(YEARS),
     endYear: pick(YEARS),
-    interests: pickMany(INTERESTS, 2, 4),
+    interests: pickMany(INTERESTS, 2, 3),
     looking: pick(LOOKING),
     mode: pick(MODES),
     goal: pick(GOALS),
+    skills: pickMany(SKILLS, 3, 5),
   };
 
-  log('\n[i] Data random:');
-  log('  Nama    : ' + first + ' ' + last);
-  log('  Email   : ' + email);
-  log('  Phone   : +91' + data.phone);
-  log('  City    : ' + data.city);
-  log('  Gender  : ' + data.gender);
-  log('  Bahasa  : ' + data.langs.join(', '));
-  log('  Tipe    : ' + data.type);
-  log('  Course  : ' + data.course);
-  log('  College : ' + data.college);
-  log('  Stream  : ' + data.stream);
-  log('  Minat   : ' + data.interests.join(', '));
-  log('  Cari    : ' + data.looking);
-  log('  Mode    : ' + data.mode);
-  log('  Goal    : ' + data.goal);
+  log('[i] Data:');
+  for (const k of Object.keys(data)) log('  ' + k + ': ' + data[k]);
   log('');
 
   const browser = await chromium.launch({
     headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-features=IsolateOrigins,site-per-process',
-    ]
+    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-blink-features=AutomationControlled']
   });
   const ctx = await browser.newContext({
     viewport: { width: 1366, height: 900 },
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     locale: 'en-IN',
     timezoneId: 'Asia/Kolkata',
-    extraHTTPHeaders: {
-      'Accept-Language': 'en-IN,en;q=0.9',
-    },
   });
+
+  await ctx.addCookies(cookies);
   const page = await ctx.newPage();
 
-  // intercept responses buat debug
-  page.on('response', async (r) => {
-    const u = r.url();
-    if (u.includes('registration') || u.includes('submit') || u.includes('otp') || u.includes('verify')) {
-      try {
-        const txt = await r.text();
-        log('[RESP ' + r.status() + '] ' + u.split('?')[0]);
-        if (txt.length < 500) log('  body: ' + txt);
-      } catch(e){}
-    }
-  });
+  // ============ CEK LOGIN ============
+  log('[*] Buka dashboard');
+  await page.goto(BASE + '/student/dashboard', { waitUntil: 'networkidle', timeout: 60000 });
+  await sleep(5000);
+  await page.screenshot({ path: 's1-dashboard.png', fullPage: true });
+  log('   URL: ' + page.url());
 
-  // ================= STEP 1: Halaman awal =================
-  log('[*] Buka halaman awal...');
-  await page.goto(BASE, { waitUntil: 'networkidle' });
-  await page.waitForTimeout(5000);
-  await page.screenshot({ path: 's1-home.png' });
+  // ============ PERSONAL DETAILS ============
+  log('\n[*] Buka personal_details');
+  await page.goto(BASE + '/student/personal_details/index', { waitUntil: 'networkidle', timeout: 60000 });
+  await sleep(8000); // tunggu JS render chip
+  await page.screenshot({ path: 's2-personal.png', fullPage: true });
 
-  log('[*] Klik "Continue with Email"...');
-  await clickNext(page, ['Continue with Email', 'Login', 'Sign up']);
-  await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(5000);
-  await page.screenshot({ path: 's2-signup.png' });
+  const chipCount = await page.$$eval('.chip', els => els.length).catch(()=>0);
+  log('   Chip di halaman: ' + chipCount);
 
-  // ================= STEP 2: Sign up =================
-  log('[*] Isi form sign up...');
-  await fillField(page, ['#email','#modal_email'], email, 'email');
-  await fillField(page, ['#password','#modal_password'], password, 'password');
-  await fillField(page, ['#first_name'], first, 'first_name');
-  await fillField(page, ['#last_name'], last, 'last_name');
+  // isi phone
+  await fillById(page, '#phone', data.phone, 'phone');
 
-  await page.screenshot({ path: 's3-signup-filled.png' });
+  // isi city autocomplete
+  await autocomplete(page, '#current_city', data.city);
 
-  log('[*] Klik "Sign up"...');
+  // gender
+  await clickChip(page, data.gender);
+
+  // languages
+  for (const l of data.langs) await clickChip(page, l);
+
+  // type
+  await clickChip(page, data.type);
+  await sleep(2000); // tunggu chip course render setelah pilih type
+
+  // course
+  await clickChip(page, data.course);
+  await sleep(1000);
+
+  // college autocomplete — input tanpa ID, pakai placeholder
   try {
-    await page.click('#registration_submit', { timeout: 5000 });
-    log('  [next] #registration_submit');
-  } catch(e) {
-    await clickNext(page, ['Sign up', 'Sign Up', 'Register']);
-  }
-  await page.waitForTimeout(8000);
-  await page.screenshot({ path: 's4-after-signup.png' });
-
-  // cek kalau ada modal error
-  const errorText = await page.evaluate(() => {
-    const modals = document.querySelectorAll('.modal, .alert, .error, [class*="error"], [class*="alert"]');
-    for (const m of modals) {
-      if (m.offsetParent !== null) {
-        const t = m.innerText.trim();
-        if (t && t.length < 300) return t;
+    const collegeInput = await page.$('input[placeholder="Eg. BITS Pilani"]');
+    if (collegeInput && await collegeInput.isVisible()) {
+      await collegeInput.scrollIntoViewIfNeeded();
+      await collegeInput.click();
+      await collegeInput.fill('');
+      await collegeInput.type(data.college, { delay: 80 });
+      await sleep(2500);
+      const opts = await page.$$('ul li, [class*="dropdown"] div, [class*="suggestion"]');
+      let clicked = false;
+      for (const opt of opts) {
+        try {
+          if (!(await opt.isVisible())) continue;
+          const t = (await opt.innerText()).trim();
+          if (t.toLowerCase().includes(data.college.toLowerCase().slice(0,5))) {
+            await opt.click({ timeout: 1500 });
+            log('  [college] ' + data.college);
+            clicked = true;
+            break;
+          }
+        } catch(e){}
+      }
+      if (!clicked) {
+        await page.keyboard.press('ArrowDown');
+        await page.keyboard.press('Enter');
+        log('  [college-enter] ' + data.college);
       }
     }
-    return null;
-  });
-  if (errorText) log('[!] Modal/error: ' + errorText.replace(/\s+/g, ' '));
+  } catch(e) { log('  [!] college gagal: ' + e.message); }
 
-  // ================= STEP 3: OTP =================
-  log('\n=== OTP dikirim ke email ===');
-  const otp = (await ask('Masukkan OTP: ')).trim();
+  // stream
+  await fillById(page, '#personal-details-stream', data.stream, 'stream');
 
-  if (otp) {
-    const filled = await page.evaluate((code) => {
-      const inputs = Array.from(document.querySelectorAll('input'));
-      let count = 0;
-      for (const inp of inputs) {
-        if (inp.offsetParent === null) continue;
-        if (inp.value) continue;
-        const type = inp.type || 'text';
-        if (type === 'hidden' || type === 'submit' || type === 'checkbox' || type === 'radio') continue;
-        inp.focus();
-        inp.value = code.charAt(count) || code;
-        inp.dispatchEvent(new Event('input', { bubbles: true }));
-        inp.dispatchEvent(new Event('change', { bubbles: true }));
-        count++;
-        if (count >= code.length) break;
-      }
-      return count;
-    }, otp);
-    log('  [otp] diisi ke ' + filled + ' field');
+  await page.screenshot({ path: 's3-personal-filled.png', fullPage: true });
 
-    if (filled <= 1) {
-      try {
-        const inp = await page.$('input[type="tel"], input[inputmode="numeric"], input[name*="otp" i]');
-        if (inp) { await inp.fill(otp); }
-      } catch(e){}
-    }
+  // klik Next
+  await clickNext(page);
+  await sleep(6000);
+  await page.screenshot({ path: 's4-after-next.png', fullPage: true });
 
-    await page.screenshot({ path: 's5-otp-filled.png' });
-    await clickNext(page, ['Verify','Submit','Continue','Next']);
-    await page.waitForTimeout(8000);
-    await page.screenshot({ path: 's6-after-otp.png' });
-  }
+  // ============ CEK HALAMAN SETELAHNYA ============
+  log('\n[*] URL setelah Next: ' + page.url());
 
-  // ================= STEP 4: Onboarding 1 =================
-  log('[*] Form onboarding 1...');
-  await page.waitForTimeout(3000);
+  // ============ FREE GEMINI ============
+  log('\n[*] Cari Free Gemini Access');
+  await page.goto(BASE + '/student/dashboard', { waitUntil: 'networkidle', timeout: 30000 });
+  await sleep(5000);
+  await page.screenshot({ path: 's5-dashboard-final.png', fullPage: true });
 
-  await fillField(page, [
-    'input[name="mobile"]',
-    'input[name="phone"]',
-    'input[placeholder*="Mobile" i]',
-  ], data.phone, 'phone');
-
-  await autocomplete(page,
-    'input[placeholder*="location" i], input[placeholder*="city" i], input[name="city"]',
-    data.city, true);
-
-  await clickPill(page, data.gender);
-  for (const l of data.langs) await clickPill(page, l);
-  await clickPill(page, data.type);
-  await clickPill(page, data.course);
-
-  await autocomplete(page,
-    'input[placeholder*="BITS" i], input[placeholder*="college" i], input[name="college"]',
-    data.college, true);
-
-  await fillField(page, [
-    'input[placeholder*="Computer Science" i]',
-    'input[name="stream"]',
-  ], data.stream, 'stream');
-
+  let gemUrl = null;
   try {
-    const selects = await page.$$('select');
-    if (selects.length >= 2) {
-      await selects[0].selectOption(data.startYear).catch(()=>{});
-      await selects[1].selectOption(data.endYear).catch(()=>{});
-      log('  [select] year');
+    const gemLink = await page.$('a:has-text("Free Gemini Access")');
+    if (gemLink) {
+      const href = await gemLink.evaluate(e => e.href);
+      log('  [gem] ' + href);
+      gemUrl = href;
+      await gemLink.click();
+      await sleep(6000);
+      await page.screenshot({ path: 's6-gemini.png', fullPage: true });
     } else {
-      await clickPill(page, data.startYear);
-      await page.waitForTimeout(500);
-      await clickPill(page, data.endYear);
+      log('  [!] Free Gemini Access nggak ketemu');
+      // scan semua link
+      const allLinks = await page.$$eval('a', els =>
+        els.map(e => ({ text: (e.innerText||'').trim(), href: e.href }))
+          .filter(l => /gemini|is.?pro|limitless|claim/i.test(l.text + ' ' + l.href))
+      );
+      allLinks.forEach(l => log('  - ' + l.text + ' -> ' + l.href));
     }
-  } catch(e){}
+  } catch(e){ log('  [!] ' + e.message); }
 
-  await page.screenshot({ path: 's7-onboard1.png' });
-  await clickNext(page, ['Next','Continue','Save']);
-  await page.waitForTimeout(6000);
-
-  // ================= STEP 5: Preferences =================
-  log('[*] Form onboarding 2...');
-  for (const i of data.interests) await clickPill(page, i);
-  await page.screenshot({ path: 's8-prefs.png' });
-  await clickNext(page, ['Next','Continue','Save']);
-  await page.waitForTimeout(6000);
-
-  // ================= STEP 6: Career goal =================
-  log('[*] Form onboarding 3...');
-  await clickPill(page, data.looking);
-  await clickPill(page, data.mode);
-  await clickCheckbox(page, data.goal);
-  await page.screenshot({ path: 's9-goal.png' });
-  await clickNext(page, ['Find me opportunities','Find opportunities','Finish','Submit','Next']);
-  await page.waitForTimeout(8000);
-
-  // ================= STEP 7: Cari Gemini =================
-  log('[*] Cari link Gemini...');
-  await page.waitForLoadState('networkidle').catch(()=>{});
-  await page.waitForTimeout(3000);
-  await page.screenshot({ path: 's10-dashboard.png', fullPage: true });
-
-  const links = await page.$$eval('a', (els) =>
-    els.map((e) => ({ text: (e.innerText||'').trim(), href: e.href }))
-  );
-  const gem = links.filter((l) =>
-    l.text.toLowerCase().includes('gemini') ||
-    l.href.toLowerCase().includes('gemini') ||
-    l.text.toLowerCase().includes('is pro') ||
-    l.text.toLowerCase().includes('limitless')
-  );
-
-  log('\n=== Hasil ===');
-  if (gem.length) {
-    for (const g of gem) log('- ' + g.text + ' -> ' + g.href);
-  } else {
-    log('Nggak ketemu link Gemini/IS PRO.');
-    log('Cek s10-dashboard.png.');
-  }
+  log('\n=== SELESAI ===');
+  if (gemUrl) log('Gemini: ' + gemUrl);
+  log('Screenshot: s1 - s6');
 
   await ask('\nEnter untuk tutup...');
   await browser.close();
